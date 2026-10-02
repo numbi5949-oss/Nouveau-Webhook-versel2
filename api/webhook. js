@@ -1,50 +1,60 @@
-export const config = {
-  runtime: 'edge',
-};
+/**
+ * Webhook Vercel Universel pour Meta WhatsApp Cloud API -&gt; Supabase Lydia
+ * Fichier : api/webhook.js
+ * 
+ * Compatible Node.js 18+ sur Vercel
+ */
 
-export default async function handler(request, context) {
-  const url = new URL(request.url);
-  const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-  const SUPABASE_URL = process.env.SUPABASE_URL;
-  const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-  const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
+module.exports = async (req, res) =&gt; {
+  // ── 1. GET : Validation du Webhook par Meta (Handshake) ───────────────────
+  if (req.method === 'GET') {
+    const mode = req.query ? req.query['hub.mode'] : null;
+    const token = req.query ? req.query['hub.verify_token'] : null;
+    const challenge = req.query ? req.query['hub.challenge'] : null;
+    const verifyToken = process.env.VERIFY_TOKEN || 'Lubumbashi123';
 
-  if (request.method === 'GET') {
-    const mode = url.searchParams.get('hub.mode');
-    const token = url.searchParams.get('hub.verify_token');
-    const challenge = url.searchParams.get('hub.challenge');
-    if (mode === 'subscribe' && token === VERIFY_TOKEN && challenge) {
-      return new Response(challenge, { status: 200, headers: { 'Content-Type': 'text/plain' } });
+    if (mode === 'subscribe' && token === verifyToken && challenge) {
+      console.log('[GET] Webhook vérifié avec succès par Meta');
+      return res.status(200).send(challenge);
     }
-    return new Response('Forbidden', { status: 403 });
+    console.warn('[GET] Échec de vérification du token Meta');
+    return res.status(403).send('Forbidden');
   }
 
-  if (request.method === 'POST') {
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-      return new Response('EVENT_RECEIVED', { status: 200 });
-    }
-    const payloadText = await request.text();
-    let targetUrl = SUPABASE_URL;
-    if (WEBHOOK_SECRET) {
+  // ── 2. POST : Réception des messages WhatsApp & Transmission à Lydia ──────
+  if (req.method === 'POST') {
+    const supabaseUrl = process.env.SUPABASE_URL || 'https://gyyfjzolylqhoxftsigy.supabase.co/functions/v1/whatsapp-public';
+    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd5eWZqem9seWxxaG94ZnRzaWd5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMzczNjcsImV4cCI6MjA5NDYxMzM2N30.rqLyKQS_CrFYiPukFsIiFfLTiVbFsll2WvEK5rKqyZA';
+    const webhookSecret = process.env.WEBHOOK_SECRET || 'sec_waba_eca_2026_x9k7m4p2';
+
+    let targetUrl = supabaseUrl;
+    if (webhookSecret) {
       const sep = targetUrl.includes('?') ? '&' : '?';
-      targetUrl = targetUrl + sep + 'secret=' + encodeURIComponent(WEBHOOK_SECRET);
-    }
-    const forwardPromise = fetch(targetUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
-        'apikey': SUPABASE_ANON_KEY,
-      },
-      body: payloadText,
-    }).catch(() => {});
-
-    if (context && typeof context.waitUntil === 'function') {
-      context.waitUntil(forwardPromise);
+      targetUrl = `${targetUrl}${sep}secret=${encodeURIComponent(webhookSecret)}`;
     }
 
-    return new Response('EVENT_RECEIVED', { status: 200 });
+    // Normalisation du payload
+    const payload = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+
+    try {
+      // Transmission vers Supabase Edge Function (Lydia répond en ~1.8 seconde)
+      await fetch(targetUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseAnonKey}`,
+          'apikey': supabaseAnonKey,
+        },
+        body: payload,
+      });
+      console.log('[POST] Message relayé avec succès à Supabase');
+    } catch (err) {
+      console.error('[POST] Erreur transmission Supabase:', err.message);
+    }
+
+    // Réponse immédiate HTTP 200 à Meta pour accuser réception
+    return res.status(200).send('EVENT_RECEIVED');
   }
 
-  return new Response('Method Not Allowed', { status: 405 });
-}
+  return res.status(405).send('Method Not Allowed');
+};
